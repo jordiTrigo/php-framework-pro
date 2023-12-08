@@ -2,7 +2,10 @@
 
 namespace AriadnaJordi\Framework\Routing;
 
+use AriadnaJordi\Framework\Http\HttpException;
+use AriadnaJordi\Framework\Http\HttpRequestMethodException;
 use AriadnaJordi\Framework\Http\Request;
+use FastRoute\Dispatcher;
 use FastRoute\RouteCollector;
 use function FastRoute\simpleDispatcher;
 
@@ -10,6 +13,21 @@ use function FastRoute\simpleDispatcher;
 class Router implements RouterInterface
 {
     public function dispatch(Request $request)
+    {
+        $routeInfo = $this->extractRouteInfo($request);
+
+        [$handler, $vars] = $routeInfo;
+
+        if( is_array($handler) ) {
+            [$controller, $method] = $handler;
+
+            return [[new $controller, $method], $vars];
+        }
+
+        return [$handler, $vars];
+    }
+
+    private function extractRouteInfo(Request $request): array
     {
         // Create a dispatcher
         $dispatcher = simpleDispatcher(function (RouteCollector $routeCollector) {
@@ -45,8 +63,23 @@ class Router implements RouterInterface
             $request->getPathInfo()
         );
 
-        [$status, [$controller, $method], $vars] = $routeInfo;
-        
-        return [[new $controller, $method], $vars];
+        //dd($routeInfo);
+
+
+        switch( $routeInfo[0] ) {
+            case Dispatcher::FOUND:
+                return [$routeInfo[1], $routeInfo[2]]; // routeHandler, vars
+
+            case Dispatcher::METHOD_NOT_ALLOWED:
+                $allowedMethods = implode(', ', $routeInfo[1]);
+                $myException = new HttpRequestMethodException('The allowed methods are ' . $allowedMethods);
+                $myException->setStatusCode(405);
+                throw $myException;
+
+            default:
+                $myException = new HttpException('Not found');
+                $myException->setStatusCode(404);
+                throw $myException;
+        };
     }
 }

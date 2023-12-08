@@ -1396,7 +1396,7 @@ interface RouterInterface
 }
 ```
 
-Now in the exact same folder we're going to create a `Router` class. The `namespace` should be the same as what we have for the interface ie `namespace AriadnaJordi\Framework\Routing` and we're going to use the previous interface in the definition of the `Router` class ie, `Router` is going to implement the interface `RouterInterface`. In this dispatch method that we declare in the `Router` class, we'll cut all the code that we have in the class `Kernel` and put in here.
+Now in the exact same folder we're going to create a `Router` class. The `namespace` should be the same as what we have for the interface ie `namespace AriadnaJordi\Framework\Routing` and we're going to use the previous interface in the definition of the `Router` class ie, `Router` is going to implement the interface `RouterInterface`. In this `dispatch` method that we declare in the `Router` class, we'll cut all the code that we have in the class `Kernel` and put in here.
 
 ```php
 <?php
@@ -1654,3 +1654,220 @@ class Router implements RouterInterface
 Our code currently only handles 'happy path' routing where a route and a handler can always be found.
 
 But that is not real-world. We need to be able to extract the route info if things go to plan but bubble up some errors and handle them when things go wrong.
+
+In this part we're going to actually create a dedicated method for getting the route info or for handling the route info and just sending back the information that you need if things have gone well. If things haven't go well, then we can throw an exception which can be caught in our `Kernel` class. 
+
+Now we'll take a look to the different types of statuses we can get back from the route info.
+
+We go to our file `/PHP/php-framework-pro/routes/web.php` where we've defined our routes and if we comment the next line of code, so now we don't have a base route:
+
+```php
+
+...
+
+return [
+    //['GET', '/', [HomeController::class, 'index']],
+
+    ...
+]
+```
+
+and try to go to `localhost:8080`, then we get an error because the actual arrays that you get back from routes which are not found, are different in structure and content than the ones when a route is found. So the error we get is:
+
+```
+Warning: Undefined array key 1 in /var/www/html/framework/Routing/Router.php on line 48
+
+Warning: Undefined array key 2 in /var/www/html/framework/Routing/Router.php on line 48
+
+Fatal error: Uncaught Error: Class name must be a valid object or a string in /var/www/html/framework/Routing/Router.php:50 Stack trace: #0 /var/www/html/framework/Http/Kernel.php(20): AriadnaJordi\Framework\Routing\Router->dispatch(Object(AriadnaJordi\Framework\Http\Request)) #1 /var/www/html/public/index.php(29): AriadnaJordi\Framework\Http\Kernel->handle(Object(AriadnaJordi\Framework\Http\Request)) #2 {main} thrown in /var/www/html/framework/Routing/Router.php on line 50
+```
+
+As we can see in `/php-framework-pro/vendor/nikic/fast-route/src/Dispatcher.php`, we have three options as a result of dispatch:
+
+```php
+public const NOT_FOUND = 0;
+public const FOUND = 1;
+public const METHOD_NOT_ALLOWED = 2;
+```
+
+So in our router, let's actually go and dump out the route info here. So we go back to our file `/php-framework-pro/framework/Routing/Router.php` and add
+
+```php
+...
+
+$routeInfo = $dispatcher->dispatch(
+    $request->getMethod(),
+    $request->getPathInfo()
+);
+
+dd($routeInfo);
+
+...
+```
+
+Again we'll go to `localhost:8080` and we get:
+
+```
+ array:1 [▼
+  0 => 0
+]
+```
+
+ie, is an array with one element inside it and that element is just the status and the status as we can see, is ZERO which, as we've just seen means NOT FOUND. 
+
+So we need to put different handling in place for when that happens. How about if we go back to the `web.php` file and instead of making a `GET` request we make it a `POST` request (`POST` is when you would submit a form or something like that):
+
+```php
+return [
+    ['POST', '/', [HomeController::class, 'index']],
+    ...
+];
+```
+
+and now we go back to `localhost:8080` and see what happens:
+
+```
+ array:2 [▼
+  0 => 2
+  1 => array:1 [▼
+    0 => "POST"
+  ]
+]
+```
+
+This time we have different information:
+
+- We have the status, which is *2* ie, the method is not allowed (when we do `localhost:8080` we're making a `GET` request). That tells us that the route *does exists but we cannot make a `GET` request to that route*, only a `POST` request is allowed as we'll see in the next array.
+
+- We have another array with the methods which are allowed, in this case, `POST`.
+
+So let's now go and create a method which is going to do all the hard work for us determining what route info we're going to send back if any. So what we're going to do is at the top of our `dispatch` method of the `Router` class, we're just going to get our `$routeInfo` back by calling a method on the same class named `$this->extractRouteInfo($request)`:
+
+```php
+class Router implements RouterInterface
+{
+    $routeInfo = $this->extractRouteInfo($request);
+    
+    public function dispatch(Request $request)
+    {
+        ...
+    }
+}
+```
+
+So we now create the method `extractRouteInfo($request)` as a private method:
+
+```php
+class Router implements RouterInterface
+{
+    $routeInfo = $this->extractRouteInfo($request);
+    
+    public function dispatch(Request $request)
+    {
+        ...
+    }
+
+    private function extractRouteInfo(Request $request)
+    {
+        // Create a dispatcher
+        $dispatcher = simpleDispatcher(function (RouteCollector $routeCollector) {
+
+            // Using the "$routeCollector" we can start to add routes.
+            // Adds a route to the collection. 
+            // Parameters:
+            // 1. @param string|string[] $httpMethod
+            // 2. @param string $route
+            // 3. @param mixed $handler
+
+            $routes = include BASE_PATH . '/routes/web.php';
+            foreach( $routes as $route ) {
+
+                $routeCollector->addRoute( ...$route );
+            };
+        });
+
+        // Dispatch a URI, to obtain the route info.
+        // Returns array with one of the following formats:
+        //
+        //     [self::NOT_FOUND] [self::METHOD_NOT_ALLOWED, ['GET', 'OTHER_ALLOWED_METHODS']] [self::FOUND, $handler, ['varName' => 'value', ...]]
+        //
+        // Parameters:
+        // 
+        //     @param string $httpMethod
+        //     @param string $uri
+        //
+        //     @return array{0:int, 1:list<string>|mixed, 2:array<string, string>}
+        
+        $routeInfo = $dispatcher->dispatch(
+            $request->getMethod(),
+            $request->getPathInfo()
+        );
+    }
+}
+```
+
+So we have three different scenarios
+
+```php
+public const NOT_FOUND = 0;
+public const FOUND = 1;
+public const METHOD_NOT_ALLOWED = 2;
+```
+
+and we need to have three different ways of handling this because we get back different data in different format for each of those scenarios. So we're going to use a `switch` block to check the status and that is always the first element of our `$routeInfo` array ie, is the element 0-index ie, `$routeInfo[0]`. The first case will handle is found, so `Dispatcher::FOUND` and we return the parts that we need which will be the `handler` (that will be the second element in the array: `$routeInfo[1]`), and the variables (that will be the third element in the array: `$routeInfo[2]`). 
+
+```php
+class Router implements RouterInterface
+{
+    $routeInfo = $this->extractRouteInfo($request);
+    
+    public function dispatch(Request $request)
+    {
+        ...
+    }
+
+    private function extractRouteInfo(Request $request)
+    {
+        // Create a dispatcher
+        $dispatcher = simpleDispatcher(function (RouteCollector $routeCollector) {
+
+            // Using the "$routeCollector" we can start to add routes.
+            // Adds a route to the collection. 
+            // Parameters:
+            // 1. @param string|string[] $httpMethod
+            // 2. @param string $route
+            // 3. @param mixed $handler
+
+            $routes = include BASE_PATH . '/routes/web.php';
+            foreach( $routes as $route ) {
+
+                $routeCollector->addRoute( ...$route );
+            };
+        });
+
+        // Dispatch a URI, to obtain the route info.
+        // Returns array with one of the following formats:
+        //
+        //     [self::NOT_FOUND] [self::METHOD_NOT_ALLOWED, ['GET', 'OTHER_ALLOWED_METHODS']] [self::FOUND, $handler, ['varName' => 'value', ...]]
+        //
+        // Parameters:
+        // 
+        //     @param string $httpMethod
+        //     @param string $uri
+        //
+        //     @return array{0:int, 1:list<string>|mixed, 2:array<string, string>}
+        
+        $routeInfo = $dispatcher->dispatch(
+            $request->getMethod(),
+            $request->getPathInfo()
+        );
+
+        switch($routeInfo[0]) {
+
+            case Dispatcher::FOUND:
+
+
+        }
+    }
+}
+```
